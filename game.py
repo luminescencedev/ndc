@@ -8,7 +8,7 @@ HEIGHT = 256
 class Game:
   def __init__(self):
     pyxel.init(WIDTH, HEIGHT, title="Tower Defense")
-    pyxel.load("theme.pyxres")  # charge images + sons (theme de Sans en son 0)
+    pyxel.load("theme.pyxres")
     pyxel.mouse(False)
     pyxel.run(self.update, self.draw)
 
