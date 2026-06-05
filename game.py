@@ -8,20 +8,9 @@ HEIGHT = 256
 class Game:
   def __init__(self):
     pyxel.init(WIDTH, HEIGHT, title="Tower Defense")
-    pyxel.load("theme.pyxres")
+    pyxel.load("theme.pyxres")  # charge images + sons (theme de Sans en son 0)
     pyxel.mouse(False)
-    self.setup_sounds()
     pyxel.run(self.update, self.draw)
-
-  def setup_sounds(self):
-    # Mini theme de Sans (Megalovania) - joue sur le canal 0
-    pyxel.sounds[0].set(
-      "d2d2d3r a2rrg#2 rg2rf2 rd2f2g2",  # le riff iconique
-      "p",   # son pulse (style chiptune)
-      "6",   # volume
-      "n",   # pas d'effet
-      15,    # vitesse (~120 BPM)
-    )
 
   def update(self):
     if pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT):
