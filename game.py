@@ -13,6 +13,7 @@ MENU = 0
 PREP = 1
 FIGHT = 2
 GAMEOVER = 3
+SETTINGS = 4
 
 # --- Zones UI (coordonnees ecran) ---
 TOP_H = 18
@@ -138,7 +139,7 @@ class Tower:
         if target:
             game.bullets.append(Bullet(self.x, self.y, target, self, game))
             self.cooldown = self.fire_rate
-            pyxel.play(2, 4)   # tir tres doux
+            game.sfx(2, 4)   # tir tres doux
 
     def draw(self, selected=False):
         t = self.t
@@ -199,11 +200,26 @@ class Game:
     def __init__(self):
         pyxel.init(SCREEN, SCREEN, title="Root Blight", fps=60)
         pyxel.mouse(False)
+        self.music_on = True
+        self.sfx_on = True
         self.setup_audio()
         pyxel.playm(0, loop=True)
         self.reset()
         self.state = MENU
         pyxel.run(self.update, self.draw)
+
+    # ------------------------------------------------ audio helpers
+    def sfx(self, ch, snd):
+        if self.sfx_on:
+            pyxel.play(ch, snd)
+
+    def toggle_music(self):
+        self.music_on = not self.music_on
+        if self.music_on:
+            pyxel.playm(0, loop=True)
+        else:
+            pyxel.stop(0)
+            pyxel.stop(1)
 
     # ------------------------------------------------ audio
     def setup_audio(self):
@@ -240,6 +256,7 @@ class Game:
         self.cam_y = (WORLD - SCREEN) // 2
         self.build_kind = 0         # type de tour selectionne pour construire
         self.selected = None        # tour selectionnee (pour ameliorer)
+        self.moving = None          # tour en cours de deplacement
         self.new_round()
 
     # ------------------------------------------------ generation
@@ -249,6 +266,7 @@ class Game:
         self.enemies = []
         self.bullets = []
         self.selected = None
+        self.moving = None
 
         if self.round == 1:
             branch_count = 1
@@ -307,7 +325,7 @@ class Game:
                     return True
         return False
 
-    def can_build(self, x, y):
+    def can_build(self, x, y, ignore=None):
         if not (CELL <= x < WORLD - CELL and CELL <= y < WORLD - CELL):
             return False
         if self.on_path(x, y):
@@ -315,6 +333,8 @@ class Game:
         if dist(x, y, TREE_X, TREE_Y) < 26:
             return False
         for tw in self.towers:
+            if tw is ignore:
+                continue
             if dist(x, y, tw.x, tw.y) < CELL:
                 return False
         return True
@@ -331,9 +351,9 @@ class Game:
             pyxel.quit()
 
         if self.state == MENU:
-            if pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT) or pyxel.btnp(pyxel.KEY_SPACE):
-                self.reset()
-                self.state = PREP
+            self.update_menu()
+        elif self.state == SETTINGS:
+            self.update_settings()
         elif self.state == GAMEOVER:
             if pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT) or pyxel.btnp(pyxel.KEY_SPACE):
                 self.reset()
@@ -345,6 +365,33 @@ class Game:
             else:
                 self.update_fight()
             self.update_fx()
+
+    # ------------------------------------------------ menu / reglages
+    def update_menu(self):
+        mx, my = pyxel.mouse_x, pyxel.mouse_y
+        if pyxel.btnp(pyxel.KEY_SPACE):
+            self.reset()
+            self.state = PREP
+            return
+        if pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT):
+            if in_rect(mx, my, 88, 158, 80, 20):
+                self.reset()
+                self.state = PREP
+            elif in_rect(mx, my, 88, 184, 80, 20):
+                self.state = SETTINGS
+
+    def update_settings(self):
+        mx, my = pyxel.mouse_x, pyxel.mouse_y
+        if pyxel.btnp(pyxel.KEY_ESCAPE):
+            self.state = MENU
+            return
+        if pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT):
+            if in_rect(mx, my, 110, 134, 40, 12):
+                self.toggle_music()
+            elif in_rect(mx, my, 110, 150, 40, 12):
+                self.sfx_on = not self.sfx_on
+            elif in_rect(mx, my, 88, 208, 80, 20):
+                self.state = MENU
 
     def update_camera(self):
         spd = 4
@@ -367,8 +414,28 @@ class Game:
     def update_prep(self):
         mx, my = pyxel.mouse_x, pyxel.mouse_y
 
+        # --- mode deplacement : reposer la tour selectionnee ---
+        if self.moving is not None:
+            if pyxel.btnp(pyxel.KEY_ESCAPE) or pyxel.btnp(pyxel.MOUSE_BUTTON_RIGHT):
+                self.selected = self.moving
+                self.moving = None
+            elif pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT) and TOP_H <= my < BAR_Y:
+                wx, wy = self.mouse_world()
+                gx, gy = self.snap(wx, wy)
+                if self.can_build(gx, gy, ignore=self.moving):
+                    self.moving.x = gx
+                    self.moving.y = gy
+                    self.selected = self.moving
+                    self.moving = None
+                    self.sfx(3, 3)
+            return
+
         if pyxel.btnp(pyxel.KEY_SPACE):
             self.start_fight()
+            return
+
+        if pyxel.btnp(pyxel.KEY_ESCAPE):
+            self.selected = None
             return
 
         if not pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT):
@@ -394,7 +461,7 @@ class Game:
             self.towers.append(Tower(gx, gy, self.build_kind))
             self.gold -= cost
             self.selected = None
-            pyxel.play(3, 3)
+            self.sfx(3, 3)
 
     def click_bottom_bar(self, mx, my):
         # bouton lancer la vague
@@ -403,17 +470,24 @@ class Game:
             return
 
         if self.selected:
-            # ameliorer / vendre
-            if in_rect(mx, my, 6, BAR_Y + 4, 84, 24):
-                cost = self.selected.upgrade_cost()
-                if self.gold >= cost and self.selected.level < 3:
+            s = self.selected
+            # AMELIORER
+            if s.level < 3 and in_rect(mx, my, 6, BAR_Y + 15, 58, 11):
+                cost = s.upgrade_cost()
+                if self.gold >= cost:
                     self.gold -= cost
-                    self.selected.level += 1
+                    s.level += 1
                 return
-            if in_rect(mx, my, 96, BAR_Y + 4, 84, 24):
-                refund = TOWER_TYPES[self.selected.kind]["cost"] // 2 + (self.selected.level - 1) * 4
+            # DEPLACER
+            if in_rect(mx, my, 68, BAR_Y + 15, 58, 11):
+                self.moving = s
+                self.selected = None
+                return
+            # VENDRE
+            if in_rect(mx, my, 130, BAR_Y + 15, 58, 11):
+                refund = TOWER_TYPES[s.kind]["cost"] // 2 + (s.level - 1) * 4
                 self.gold += refund
-                self.towers.remove(self.selected)
+                self.towers.remove(s)
                 self.selected = None
                 return
             self.selected = None
@@ -443,7 +517,7 @@ class Game:
         for e in self.enemies:
             if e.update():
                 self.life -= 1
-                pyxel.play(2, 5)
+                self.sfx(2, 5)
             elif e.hp <= 0:
                 self.gold += 3
             else:
@@ -462,6 +536,9 @@ class Game:
     def draw(self):
         if self.state == MENU:
             self.draw_menu()
+            return
+        if self.state == SETTINGS:
+            self.draw_settings()
             return
 
         pyxel.cls(1)
@@ -511,16 +588,25 @@ class Game:
         for f in self.fx:
             pyxel.circb(f[0], f[1], f[2] * (5 - f[3]) // 4, f[3] + 1)
 
-        # apercu de construction
-        if self.state == PREP and not self.selected:
+        # apercu (deplacement ou construction)
+        if self.state == PREP:
             wx, wy = self.mouse_world()
-            if wy < self.cam_y + TOP_H or wy > self.cam_y + BAR_Y:
+            inside = self.cam_y + TOP_H <= wy <= self.cam_y + BAR_Y
+            if not inside:
                 return
             gx, gy = self.snap(wx, wy)
-            ok = self.can_build(gx, gy) and self.gold >= TOWER_TYPES[self.build_kind]["cost"]
-            t = TOWER_TYPES[self.build_kind]
+
+            if self.moving is not None:
+                ok = self.can_build(gx, gy, ignore=self.moving)
+                rng = self.moving.range
+            elif not self.selected:
+                ok = self.can_build(gx, gy) and self.gold >= TOWER_TYPES[self.build_kind]["cost"]
+                rng = TOWER_TYPES[self.build_kind]["range"]
+            else:
+                return
+
             ring = 11 if ok else 8
-            pyxel.circb(gx, gy, t["range"], ring)
+            pyxel.circb(gx, gy, rng, ring)
             pyxel.circb(gx, gy, 6, ring)
 
     # ------------------------------------------------ UI
@@ -540,7 +626,10 @@ class Game:
         pyxel.rect(0, BAR_Y, SCREEN, 1, 5)
 
         if self.state == PREP:
-            if self.selected:
+            if self.moving is not None:
+                pyxel.text(8, BAR_Y + 8, "DEPLACEMENT", 11)
+                pyxel.text(8, BAR_Y + 18, "clic: poser | clic droit/ECHAP: annuler", 6)
+            elif self.selected:
                 self.draw_selected_panel()
             else:
                 self.draw_build_panel()
@@ -568,16 +657,16 @@ class Game:
     def draw_selected_panel(self):
         s = self.selected
         t = s.t
-        pyxel.text(8, BAR_Y + 6, f"{t['name']}  Niv.{s.level}", 7)
-        pyxel.text(8, BAR_Y + 16, f"deg {s.damage}  portee {s.range}", 6)
+        pyxel.text(6, BAR_Y + 4, f"{t['name']} Niv.{s.level}  deg{s.damage} por{s.range}", 7)
 
         if s.level < 3:
-            self.draw_button(96, BAR_Y + 4, 84, 24,
-                             f"+ NIV {s.upgrade_cost()}or", 11, 3)
+            self.draw_button(6, BAR_Y + 15, 58, 11, f"+NIV {s.upgrade_cost()}", 11, 3)
         else:
-            pyxel.rect(96, BAR_Y + 4, 84, 24, 0)
-            pyxel.rectb(96, BAR_Y + 4, 84, 24, 5)
-            pyxel.text(110, BAR_Y + 12, "NIV MAX", 10)
+            pyxel.rectb(6, BAR_Y + 15, 58, 11, 5)
+            pyxel.text(20, BAR_Y + 17, "NIV MAX", 10)
+
+        self.draw_button(68, BAR_Y + 15, 58, 11, "DEPLACER", 12, 3)
+        self.draw_button(130, BAR_Y + 15, 58, 11, "VENDRE", 8, 3)
 
     def draw_button(self, x, y, w, h, label, border, fill):
         mx, my = pyxel.mouse_x, pyxel.mouse_y
@@ -592,20 +681,63 @@ class Game:
         pyxel.cls(1)
         for i in range(0, SCREEN, 8):
             pyxel.pset(i, (i * 3) % SCREEN, 0)
-        cx, cy = SCREEN // 2, 96
+        cx, cy = SCREEN // 2, 78
         g = 22 + int(3 * math.sin(pyxel.frame_count * 0.06))
         pyxel.circ(cx, cy, g, 3)
         pyxel.circ(cx, cy, 16, 11)
         pyxel.circ(cx, cy, 9, 3)
         pyxel.rect(cx - 2, cy + 14, 4, 20, 4)
 
-        self.center_text(150, "ROOT  BLIGHT", 11)
-        self.center_text(164, "defends l'arbre ancien", 6)
-        if (pyxel.frame_count // 20) % 2 == 0:
-            self.center_text(196, "CLIC ou ESPACE pour jouer", 7)
-        self.center_text(232, "fleches/WASD: camera", 5)
-        self.center_text(242, "ctrl+Q: quitter", 5)
+        self.center_text(124, "ROOT  BLIGHT", 11)
+        self.center_text(138, "defends l'arbre ancien", 6)
+
+        self.draw_button(88, 158, 80, 20, "JOUER", 11, 3)
+        self.draw_button(88, 184, 80, 20, "REGLAGES", 13, 3)
+
+        self.center_text(244, "ctrl+Q: quitter", 5)
         self.draw_cursor()
+
+    def draw_settings(self):
+        pyxel.cls(1)
+        for i in range(0, SCREEN, 8):
+            pyxel.pset(i, (i * 5) % SCREEN, 0)
+
+        self.center_text(14, "REGLAGES", 11)
+
+        # --- commandes exactes ---
+        pyxel.text(28, 34, "COMMANDES", 10)
+        lines = [
+            ("Clic gauche", "placer / choisir une tour"),
+            ("Fleches / WASD", "deplacer la camera"),
+            ("ESPACE", "lancer la vague"),
+            ("Clic sur tour", "ameliorer / vendre"),
+            ("ECHAP", "retour au menu"),
+            ("Ctrl + Q", "quitter le jeu"),
+        ]
+        y = 46
+        for key, desc in lines:
+            pyxel.text(30, y, key, 7)
+            pyxel.text(124, y, desc, 6)
+            y += 11
+
+        # --- options audio ---
+        pyxel.text(28, 120, "AUDIO", 10)
+        self.draw_toggle_box(110, 134, self.music_on, "Musique")
+        self.draw_toggle_box(110, 150, self.sfx_on, "Effets")
+
+        self.draw_button(88, 208, 80, 20, "RETOUR", 11, 3)
+        self.center_text(236, "ECHAP ou clic RETOUR", 5)
+        self.draw_cursor()
+
+    def draw_toggle_box(self, x, y, on, label):
+        pyxel.text(30, y + 3, label, 7)
+        mx, my = pyxel.mouse_x, pyxel.mouse_y
+        hover = in_rect(mx, my, x, y, 40, 12)
+        col = 11 if on else 8
+        pyxel.rect(x, y, 40, 12, 5 if hover else 0)
+        pyxel.rectb(x, y, 40, 12, col)
+        txt = "ON" if on else "OFF"
+        pyxel.text(x + (40 - len(txt) * 4) // 2, y + 3, txt, col)
 
     def draw_gameover(self):
         pyxel.rect(0, 96, SCREEN, 64, 0)
